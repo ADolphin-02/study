@@ -217,7 +217,7 @@ public class RedisWithReentrantLock {
 **多个进程取到之后再使用 zrem 进行争抢**那些没抢到的进程都是白取了一次任务，这是浪费。可以考虑使用 lua scripting 来优化一下这个逻辑，将
 zrangebyscore 和 zrem 一同挪到服务器端进行原子化操作，这样多个进程之间争抢任务时就不会出现这种浪费了
 
-# 应用 3：位图
+# 应用 3：位图（签到）
 
 ## 基本使用
 
@@ -282,3 +282,89 @@ HyperLogLog 提供了两个指令 `pfadd 和 pfcount`
 # 应用 5： 布隆过滤器 
 
 场景：推送不重复的抖音视频。
+
+# 应用 6： 简单限流 （自己学）
+
+优点：能够精确的统计次数。
+
+缺点：就是zset的数据结构会越来越大
+
+求打造成一个zset数组，当每一次请求进来的时候，value保持唯一（唯一用户），而score可以用当前时间戳表示，因为score我们可以用来计算当前时间戳之内有多少的请求数量。
+
+zremrangeByScore：删除时间窗口以外的请求
+
+每一个行为到来时，都维护一次时间窗口。将时间窗口外的记录全部清理掉，只保留窗口内的记录。zset 集合中只有 score 值非常重要，value 值没有特别的意义，只需要保证它是唯一的就可以了。 
+
+```java
+public class SimpleRateLimiter {
+    private Jedis jedis;
+
+    public SimpleRateLimiter(Jedis jedis) {
+        this.jedis = jedis;
+    }
+
+    public boolean isActionAllowed(String userId, String actionKey, int period, int maxCount) {
+        String key = String.format("hist:%s:%s", userId, actionKey);
+        long nowTs = System.currentTimeMillis();
+        Pipeline pipe = jedis.pipelined();
+        pipe.multi();
+        // value 没有实际的意义，保证唯一就可以
+        pipe.zadd(key, nowTs, "" + nowTs);
+        pipe.zremrangeByScore(key, 0, nowTs - period * 1000);
+        Response<Long> count = pipe.zcard(key);
+        pipe.expire(key, period + 1);
+        pipe.exec();
+        pipe.close();
+        return count.get() <= maxCount;
+    }
+
+    public static void main(String[] args) {
+        Jedis jedis = new Jedis();
+        SimpleRateLimiter limiter = new SimpleRateLimiter(jedis);
+        for (int i = 0; i < 20; i++) { //相当于请求
+            System.out.println(limiter.isActionAllowed("laoqian", "reply", 60, 5));
+        }
+    }
+}
+```
+
+# 应用 7： 漏斗限流 
+
+## 前面还有，不会
+
+## Redis-Cell
+
+Redis 4.0 提供了一个限流 Redis 模块，它叫 redis-cell。该模块也使用了漏斗算法，并提供了`原子的限流指令`。有了这个模块，限流问题就非常简单了。 
+
+该模块只有 1 条指令 `cl.throttle`，参数和返回值
+
+![image-20200818145931369](Redis 基础数据结构.assets/image-20200818145931369.png)
+
+上面这个指令的意思是允许「用户老钱回复行为」的频率为每 60s 最多 30 次(漏水速率)，漏斗的初始容量为 15，也就是说一开始可以连续回复 15 个帖子，然后才开始受漏水速率的影响。我们看到这个指令中漏水速率变成了 2 个参数，替代了之前的单个浮点数。
+
+![image-20200818150935161](Redis 基础数据结构.assets/image-20200818150935161.png)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
