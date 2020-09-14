@@ -1,0 +1,13 @@
+Optional.ofNullable(dept.getStatus()).orElse(1) jdk 允许为空，设置默认值
+
+Objects.requireNonNull(id); 不允许为空
+ ObjectUtil.isNull(classT)
+
+ MapUtil.getStr(conditionMap, "dajdh");
+
+getById（）
+
+wrapper.and(i -> i.like("name", name).or()
+                    .like("name_full_pin_yin", name).or()
+                    .like("name_simple_pin_yin", name)
+            );
