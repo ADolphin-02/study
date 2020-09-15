@@ -1,4 +1,5 @@
 Optional.ofNullable(dept.getStatus()).orElse(1) jdk 允许为空，设置默认值
+CollUtil.isEmpty（属性）
 
 Objects.requireNonNull(id); 不允许为空
  ObjectUtil.isNull(classT)
@@ -11,3 +12,7 @@ wrapper.and(i -> i.like("name", name).or()
                     .like("name_full_pin_yin", name).or()
                     .like("name_simple_pin_yin", name)
             );
+
+ Set<Long> attendeeUserSet = meeting.getAttendeeUser().stream()
+                    .filter(meetingAttendeeUser -> ObjectUtil.isNotNull(meetingAttendeeUser.getId()))
+                    .map(MeetingAttendeeUser::getId).collect(Collectors.toSet());
