@@ -1,12 +1,14 @@
 Optional.ofNullable(dept.getStatus()).orElse(1) jdk 允许为空，设置默认值
 CollUtil.isEmpty（属性）
+CollUtil.contains(topDeptList, id)
 
 Objects.requireNonNull(id); 不允许为空
- ObjectUtil.isNull(classT)
+ObjectUtil.isNull(classT)
 
- MapUtil.getStr(conditionMap, "dajdh");
+MapUtil.getStr(conditionMap, "dajdh");
 
 getById（）
+CollUtil.removeNull // 移除空
 
 wrapper.and(i -> i.like("name", name).or()
                     .like("name_full_pin_yin", name).or()
@@ -16,3 +18,5 @@ wrapper.and(i -> i.like("name", name).or()
  Set<Long> attendeeUserSet = meeting.getAttendeeUser().stream()
                     .filter(meetingAttendeeUser -> ObjectUtil.isNotNull(meetingAttendeeUser.getId()))
                     .map(MeetingAttendeeUser::getId).collect(Collectors.toSet());
+
+		            boolean isBad = participantList.stream().anyMatch(participant -> StringUtils.isBlank(participant.getAddress()) || participant.getMeetingId() == null);
