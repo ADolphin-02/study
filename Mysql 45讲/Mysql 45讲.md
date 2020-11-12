@@ -1212,21 +1212,21 @@ count(字段)<count(主键id)<count(1)≈count(*)
 
 ![image-20201111172419909](Mysql 45讲.assets/image-20201111172419909.png)
 
+### 那能不能反过来，只用redo log，不要binlog？
 
+一个是归档。redo log是循环写，写到末尾是要回到开头继续写的。这样历史日志没法保 留，redo log也就起不到归档的作用。
 
+MySQL系统高可用的基础，就是binlog复制。
 
+有异构系统，这些系统就靠消费MySQL的binlog来更新 自己的数据。关掉binlog的话，这些下游系统就没法输入了。
 
+括MySQL高可用在内的很多系统机制都依赖于binlog，所以“鸠占鹊巢”redo log还做不到。
 
+### redo log一般设置多大？
 
+所以，如果是现在常见的几个TB的磁盘的话，就不要太小气了，直接将redo log设置为4个文 件、每个文件1GB吧。
 
-
-
-
-
-
-
-
-
+### 正常运行中的实例，数据写入后的最终落盘，是从redo log更新过来的 还是从buffer pool更新过来的呢？
 
 
 
