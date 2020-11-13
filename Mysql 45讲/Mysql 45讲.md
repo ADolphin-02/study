@@ -1164,7 +1164,11 @@ count(字段)<count(主键id)<count(1)≈count(*)
 
 ## 问题
 
+![image-20201113094643767](Mysql 45讲.assets/image-20201113094643767.png)
+
 从并发系统性能的角度 考虑，你觉得在这个事务序列里，应该先插入操作记录，还是应该先更新计数表呢？
+
+因为更新计数表涉及到行锁的竞争，先插入再更新能最大程度地减少事务之间的锁等待，提升 并发度
 
 
 
@@ -1228,29 +1232,262 @@ MySQL系统高可用的基础，就是binlog复制。
 
 ### 正常运行中的实例，数据写入后的最终落盘，是从redo log更新过来的 还是从buffer pool更新过来的呢？
 
+![image-20201113092717264](Mysql 45讲.assets/image-20201113092717264.png)
 
+## redo log buffer是什么？是先修改内存，还是先写redo log文件？
 
+生成的日志都得先保存起来，但又不能在 还没commit的时候就直接写到redo log文件里。 所以，`redo log buffer`就是一块内存，用来先存redo日志的。
 
+也就是说，在执行第一个insert的时 候，数据的内存被修改了，redo log buffer也写入了日志。 但是，真正把日志写到redo log文件（文件名是 ib_logfile+数字），是在执行`commit语句`的时候 做的。
 
+## 问题
 
+![image-20201113094906258](Mysql 45讲.assets/image-20201113094906258.png)
 
+![image-20201113094922992](Mysql 45讲.assets/image-20201113094922992.png)
 
+选项3，即：InnoDB认真执行了“把这个值修改成(1,2)"这个 操作，该加锁的加锁，该更新的更新。
 
+![image-20201113111522765](Mysql 45讲.assets/image-20201113111522765.png)
 
+![image-20201113111544883](Mysql 45讲.assets/image-20201113111544883.png)
 
+MySQL认为读出来的值，只有一个确定的 (id=1), 而要写的是(a=3)，只从这两个信息是看不出来“不需要修改”的。
 
+![image-20201113111504129](Mysql 45讲.assets/image-20201113111504129.png)
 
+上面我们的验证结果都是在binlog_format=statement格式下进行的。
 
+# 16 | “order by”是怎么工作的？
 
+假设你要查询城市是“杭州”的所有人名字，并且按照姓名排序返回 前1000个人的姓名、年龄。
 
+```mysql
+CREATE TABLE `t` ( 
+    `id` int(11) NOTNULL,
+    `city` varchar(16) NOTNULL, 
+    `name` varchar(16) NOTNULL,
+    `age` int(11) NOTNULL, 
+    `addr` varchar(128) DEFAULTNULL, 
+    PRIMARY KEY (`id`),
+    KEY `city` (`city`) 
+) ENGINE=InnoDB;
+```
 
+可以这么写
 
+```
+select city,name,age from t where city='杭州' order by name limit 1000 ;
+```
 
+## 全字段排序
 
+![image-20201113100633369](Mysql 45讲.assets/image-20201113100633369.png)
 
+Extra这个字段中的“Using filesort”表示的就是需要排序，MySQL会给每个线程分配一块内存用于 排序，称为**sort_buffer**。
 
+![image-20201113100705566](Mysql 45讲.assets/image-20201113100705566.png)
 
+语句执行流程：
 
+1. 初始化sort_buffer，确定放入name、city、age这三个字段； 
+
+2. 从索引city找到第一个满足city='杭州’条件的主键id，也就是图中的ID_X； 
+
+3. 到主键id索引取出整行，取name、city、age三个字段的值，存入sort_buffer中；
+
+4. 从索引city取下一个记录的主键id； 
+
+5. 重复步骤3、4直到city的值不满足查询条件为止，对应的主键id也就是图中的ID_Y；
+
+6.  对sort_buffer中的数据按照字段name做快速排序； 
+
+7. 按照排序结果取前1000行返回给客户端。
+
+   ![image-20201113101010113](Mysql 45讲.assets/image-20201113101010113.png)
+
+**sort_buffer_size**，就是MySQL为排序开辟的内存（sort_buffer）的大小。如果要排序的数据量 小于sort_buffer_size，排序就在内存中完成。但如果**排序数据量太大**，内存放不下，则不得不利用**磁盘临时文件**辅助排序。
+
+你可以用下面介绍的方法，来确定一个排序语句是否使用了临时文件。
+
+![image-20201113101819768](Mysql 45讲.assets/image-20201113101819768.png)
+
+![image-20201113101839973](Mysql 45讲.assets/image-20201113101839973.png)
+
+number_of_tmp_files表示的是，排序过程中使用的临时文件数
+
+用归并排序算法：MySQL将需要排序的数据分成12份，每一份单独排序后存在这些临时文件中。然后把 这12个有序文件再合并成一个有序的大文件
+
+![image-20201113101932804](Mysql 45讲.assets/image-20201113101932804.png)
+
+## rowid排序
+
+![image-20201113102623739](Mysql 45讲.assets/image-20201113102623739.png)
+
+sort_buffer里面 要放的**字段数太多**，这样内存里能够同时放下的行数很少，要分成很多个临时文件，排序的性能 会很差。
+
+```mysql
+SETmax_length_for_sort_data = 16;
+```
+
+city、name、age 这三个字段的定义总长度是36，我把max_length_for_sort_data设置为16
+
+![image-20201113102731506](Mysql 45讲.assets/image-20201113102731506.png)
+
+需要说明的是，最后的“结果集”是一个逻辑概念，实际上MySQL服务端从排序后的sort_buffer中 依次取出id，然后到原表查到city、name和age这三个字段的结果，不需要在服务端再耗费内存 存储结果，是直接返回给客户端的。
+
+图中的examined_rows的值还是4000，表示用于排序的数据是4000行。但是select @b- @a这个语句的值变成5000了。 因为这时候除了排序过程外，在排序完成后，还要根据id去原表取值。由于语句是limit 1000，因 此会多读1000行
+
+![image-20201113103901176](Mysql 45讲.assets/image-20201113103901176.png)
+
+从OPTIMIZER_TRACE的结果中，你还能看到另外两个信息也变了
+
+- sort_mode变成了，表示参与排序的只有name和id这两个字段。
+-  number_of_tmp_files变成10了，是因为这时候参与排序的行数虽然仍然是4000行，但是每一 行都变小了，因此需要排序的总数据量就变小了，需要的临时文件也相应地变少了
+
+## 全字段排序 VS rowid排序
+
+**如果内存够，就要多利用内存，尽量减少磁盘访问。**
+
+对于InnoDB表来说，rowid排序会要求回表多造成磁盘读，因此不会被优先选择
+
+并不是所有的order by语句，都需要排序操作的。
+
+如果能够保证从city这个索引上取出来的行，天然就是按照name递增排序的话就不用了。
+
+```
+alter table t add index city_user(city, name);
+```
+
+![image-20201113104545132](Mysql 45讲.assets/image-20201113104545132.png)
+
+![image-20201113104606473](Mysql 45讲.assets/image-20201113104606473.png)
+
+![image-20201113105114361](Mysql 45讲.assets/image-20201113105114361.png)
+
+Extra字段中没有Using filesort了，询也不用把4000行全都读一遍，只要找到满足条件的前 1000条记录就可以退出了
+
+覆盖索引是指，索引上的信息足够满足查询请求，不需要再 回到主键索引上去取数据。
+
+针对这个查询，我们可以创建一个city、name和age的联合索引，对应的SQL语句就是：
+
+```
+alter table t add index city_user_age(city, name, age);
+```
+
+![image-20201113110819017](Mysql 45讲.assets/image-20201113110819017.png)
+
+Extra字段里面多了“Using index”，表示的就是使用了覆盖索引，性能上会快很多。
+
+## 问题
+
+![image-20201113111100462](Mysql 45讲.assets/image-20201113111100462.png)
+
+![image-20201113154349777](Mysql 45讲.assets/image-20201113154349777.png)
+
+# 17 | 如何正确地显示随机消息？
+
+## 内存临时表
+
+```mysql
+mysql> select word from words order by rand() limit 3;
+```
+
+![image-20201113141851787](Mysql 45讲.assets/image-20201113141851787.png)
+
+Using temporary，表示的是需要使用临时表，Using filesort，表示的是需要执行 排序操作。
+
+对于InnoDB表来说，执行**全字段排序**会减少磁盘访问，因此会被**优先选择**
+
+对于内存表，回表过程只是简单地根据数据行的位置，直接访问内存得到数据，根本不会导致多访问磁盘。MySQL这时就会选择**rowid排序**
+
+![image-20201113142302695](Mysql 45讲.assets/image-20201113142302695.png)
+
+![image-20201113142632031](Mysql 45讲.assets/image-20201113142632031.png)
+
+通过慢查询日志（slowlog）
+
+```mysql
+# Query_time: 0.900376 Lock_time: 0.000347 Rows_sent: 3 Rows_examined: 20003
+SET timestamp=1541402277; 
+select word from words order by rand() limit 3;
+```
+
+InnoDB表的主键删掉。么InnoDB会自己生成 一个长度为6字节的rowid来作为主键。
+
+**order by rand()使用了内存临时表，内存临时表排序的时候使用了rowid排序方法。**
+
+## 磁盘临时表
+
+`tmp_table_size`这个配置限制了内存临时表的大小，默认值是16M。如果临时表大 小超过了tmp_table_size，那么内存临时表就会转成磁盘临时表。
+
+磁盘临时表使用的引擎默认是InnoDB，是由参数internal_tmp_disk_storage_engine控制的。
+
+![image-20201113144247728](Mysql 45讲.assets/image-20201113144247728.png)
+
+![image-20201113144259769](Mysql 45讲.assets/image-20201113144259769.png)
+
+sort_mode里面显示的是rowid排序，这个是符合预期的，参与排序的是随机值R字段和rowid字 段组成的行。排序的是随机值R字段和rowid字段组成的行。
+
+这时候你可能心算了一下，发现不对。R字段存放的随机值就8个字节，rowid是6个字节（至于 为什么是6字节，就留给你课后思考吧），数据总行数是10000，这样算出来就有140000字节， **超过了sort_buffer_size** 定义的 32768字节了。但是，number_of_tmp_files的值居然是0，难道`不需要用临时文件吗`？
+
+采用是MySQL 5.6版本引入的一个新的排序算法，优先队列排序算法（堆排序），只要3个却得到了全部的排序。
+
+![image-20201113151228902](Mysql 45讲.assets/image-20201113151228902.png)
+
+为了最快地拿到当前堆的最大值，总是保持最大值在堆顶，因此这是一个最大堆。
+
+filesort_priority_queue_optimization这个部分的 chosen=true，就表示使用了优先队列排序算法，这个过程不需要临时文件，因此对应的 number_of_tmp_files是0。
+
+## 随机排序方法	
+
+### 随机算法1
+
+![image-20201113152405573](Mysql 45讲.assets/image-20201113152405573.png)
+
+因为取max(id)和min(id)都是不需要扫描索引的，而第三步的select也可以用 索引快速定位，可以认为就**只扫描了3行**。但实际上，这个算法本身并不严格满足题目的随机要 求，因为ID中间可能有空洞，因此选择不同行的概率不一样，不是真正的随机。
+
+### 随机算法2。
+
+![image-20201113152452368](Mysql 45讲.assets/image-20201113152452368.png)
+
+![image-20201113152459954](Mysql 45讲.assets/image-20201113152459954.png)
+
+解决了算法1里面明显的概率不均匀问题，，总共需要扫描C+Y+1行，
+
+当然，随机算法2跟直接order by rand()比起来，执行代价还是小很多的。
+
+要随机取3个word值呢，是 C+(Y1+1)+(Y2+1)+(Y3+1)![image-20201113152600882](Mysql 45讲.assets/image-20201113152600882.png)
+
+## 小结
+
+如果你直接使用order by rand()，这个语句需要Using temporary和 Using filesort，查询的执行代 价往往是比较大的。所以，在设计的时候你要量避开这种写法。
+
+比较规范的用法就是：尽量将业务逻辑写在业务代码中，让数据库只做“读 写数据”的事情。因此，这类方法的应用还是比较广泛的。
+
+## 问题
+
+![image-20201113154446424](Mysql 45讲.assets/image-20201113154446424.png)
+
+# 18 | 为什么这些SQL语句逻辑相同，性能却差异巨大？
+
+```mysql
+mysql> CREATE TABLE `tradelog` ( 
+    `id` int(11) NOT NULL, 
+    `tradeid` varchar(32) DEFAULT NULL, 
+    `operator` int(11) DEFAULT NULL, 
+    `t_modified` datetime DEFAULT NULL,
+    PRIMARY KEY (`id`), 
+    KEY `tradeid` (`tradeid`), 
+    KEY `t_modified` (`t_modified`) 
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+要统计发 生在所有年份中7月份的交易记录总数
+
+```
+mysql> select count(*) from tradelog where month(t_modified)=7;
+```
 
 
 
