@@ -1,3 +1,5 @@
+
+
 # 01 | 基础架构：查询的执行
 
 ![image-20200910112754326](Mysql 45讲.assets/image-20200910112754326.png)
@@ -529,6 +531,8 @@ InnoDB利用了“所有数据都有多个版本”的这个特性，实现了�
 是的，如果事务B在更新之前查询一次数据，这个查询返回的k的值确实是1。
 
 **更新数据都是先读后写的，而这个读，只能读当前的 值，称为“当前读”（current read）。**
+
+**带lock in share mode的SQL语句，是当前读**
 
 所以，在执行事务B查询语句的时候，一看自己的版本号是101，最新数据的版本号也是101，是 自己的更新，可以直接使用，所以查询得到的k的值是3。
 
@@ -1453,7 +1457,7 @@ filesort_priority_queue_optimization这个部分的 chosen=true，就表示使�
 
 ![image-20201113152459954](Mysql 45讲.assets/image-20201113152459954.png)
 
-解决了算法1里面明显的概率不均匀问题，，总共需要扫描C+Y+1行，
+解决了算法1里面明显的概率不均匀问题，总共需要扫描C+Y+1行，
 
 当然，随机算法2跟直接order by rand()比起来，执行代价还是小很多的。
 
@@ -1469,6 +1473,12 @@ filesort_priority_queue_optimization这个部分的 chosen=true，就表示使�
 
 ![image-20201113154446424](Mysql 45讲.assets/image-20201113154446424.png)
 
+```mysql
+mysql> select * from t limit N, M-N+1;
+```
+
+再加上取整个表总行数的C行，这个方案的扫描行数总共只需要C+M+1行。最小n为0
+
 # 18 | 为什么这些SQL语句逻辑相同，性能却差异巨大？
 
 ```mysql
@@ -1483,11 +1493,295 @@ mysql> CREATE TABLE `tradelog` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
+## 案例一：条件字段函数操作
+
 要统计发 生在所有年份中7月份的交易记录总数
 
 ```
 mysql> select count(*) from tradelog where month(t_modified)=7;
 ```
+
+为什么条件是where t_modified='2018-7-1’的时候可以用上索引，而改成where month(t_modified)=7就不行。
+
+方框上面的数字就是month()函数对应的值。
+
+![image-20201116151407476](Mysql 45讲.assets/image-20201116151407476.png)
+
+如果你的SQL语句条件用的是where t_modified='2018-7-1’的话，引擎就会按照上面绿色箭头的 路线，快速定位到 t_modified='2018-7-1’需要的结果。 
+
+实际上，B+树提供的这个快速定位能力，来源于同一层兄弟节点的**有序性**。
+
+**对索引字段做函数操作，可能会破坏索引值的有序性，因此优化器就决定放弃走树搜索功能。**
+
+优化器并不是要放弃使用这个索引。
+
+在这个例子里，放弃了树搜索功能，优化器可以选择遍历主键索引，也可以选择遍历索引 t_modified，优化器**对比索引大小后**发现，索引t_modified**更小**，遍历这个索引比遍历主键索引 来得更快。因此最终还是会选择索引t_modified。
+
+![image-20201116151620211](Mysql 45讲.assets/image-20201116151620211.png)
+
+key="t_modified"表示的是，使用了t_modified这个索引；
+
+Extra字段的Using index，表示的 是使用了覆盖索引。
+
+```mysql
+mysql> select count(*) from tradelog where
+-> (t_modified >= '2016-7-1' and t_modified<'2016-8-1') or
+-> (t_modified >= '2017-7-1' and t_modified<'2017-8-1') or
+-> (t_modified >= '2018-7-1' and t_modified<'2018-8-1');
+```
+
+## 案例二：隐式类型转换
+
+```mysql
+mysql> select * from tradelog where tradeid=110717; // 字段为字符串
+```
+
+select “10” > 9
+
+1. 如果规则是“将字符串转成数字”，那么就是做数字比较，结果应该是1； 
+
+2. 如果规则是“将数字转成字符串”，那么就是做字符串比较，结果应该是0。
+
+在MySQL 中，字符串和数字做比较的话，是将**字符串**转换成**数字**。
+
+这个语句相当于：
+
+```mysql
+mysql> select * from tradelog where CAST(tradid AS signed int) = 110717;
+```
+
+规则：对索引字段做函数操作，优化器会放弃走树搜 索功能。
+
+## 案例三：隐式字符编码转换
+
+另外一个表trade_detail，用于记录交易的操作细节。
+
+```mysql
+mysql> CREATE TABLE `trade_detail` (
+`id` int(11) NOT NULL,
+`tradeid` varchar(32) DEFAULT NULL,
+`trade_step` int(11) DEFAULT NULL, /*操作步骤*/
+`step_info` varchar(32) DEFAULT NULL, /*步骤信息*/
+PRIMARY KEY (`id`),
+KEY `tradeid` (`tradeid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+```
+
+```mysql
+mysql> select d.* from tradelog l, trade_detail d where d.tradeid=l.tradeid and l.id=2; /*语句Q
+```
+
+![image-20201116153408847](Mysql 45讲.assets/image-20201116153408847.png)
+
+![image-20201116153529525](Mysql 45讲.assets/image-20201116153529525.png)
+
+是从tradelog表中取tradeid字段，再去trade_detail表里查询匹配字段。
+
+![image-20201116153607599](Mysql 45讲.assets/image-20201116153607599.png)
+
+![image-20201116153647334](Mysql 45讲.assets/image-20201116153647334.png)
+
+这两个表的字符集不同，一个是**utf8**，一个是 **utf8mb4**
+
+字符集utf8mb4是utf8的超集，先把utf8字符串转成utf8mb4字符集，需要将被驱动数据表里的字段一个个地转换成utf8mb4
+
+等同于：
+
+```mysql
+select * from trade_detail where CONVERT(traideid USING utf8mb4)=$L2.tradeid.value;
+```
+
+**对索引字段做函数操作，优化器会放弃走树搜索功能**
+
+方法一：要优化语句
+
+```mysql
+alter table trade_detail modify tradeid varchar(32) CHARACTER SET utf8mb4 default null;
+```
+
+方法二：我主动把 l.tradeid转成utf8，就避免了被驱动表上的字符编码转换
+
+```mysql
+mysql> select d.* from tradelog l , trade_detail d where d.tradeid=CONVERT(l.tradeid USING utf8) and l.id = 2;
+```
+
+## 问题
+
+有趣的场景
+
+```mysql
+mysql> CREATE TABLE `table_a` (
+`id` int(11) NOT NULL,
+`b` varchar(10) DEFAULT NULL,
+PRIMARY KEY (`id`),
+KEY `b` (`b`)
+) ENGINE=InnoDB;
+```
+
+
+
+# 19 | 为什么我只查一行的语句，也执行这么慢？
+
+```mysql
+mysql> CREATE TABLE `t` (
+`id` int(11) NOT NULL,
+`c` int(11) DEFAULT NULL,
+PRIMARY KEY (`id`)
+) ENGINE=InnoDB;
+```
+
+其中有10万行数据的b的值是’1234567890’
+
+```mysql
+mysql> select * from table_a where b='1234567890abcd';
+```
+
+最理想的情况是，MySQL看到字段b定义的是varchar(10)，那肯定返回空呀。
+
+![image-20201116164945552](Mysql 45讲.assets/image-20201116164945552.png)
+
+## 第一类：查询长时间不返回
+
+```mysql
+mysql> select * from t where id=1;
+```
+
+一般碰到这种情况的话，大概率是表t被锁住了。
+
+`show processlist`查看
+
+![image-20201116155549325](Mysql 45讲.assets/image-20201116155549325.png)
+
+### 等MDL锁
+
+这个状态表示的是，现在有一个线程正在表t上请求或者持有MDL写锁，把select语句 堵住了。
+
+![image-20201116155621735](Mysql 45讲.assets/image-20201116155621735.png)
+
+这类问题的处理方式，就是找到谁持有MDL写锁，然后把它`kill掉。`
+
+![image-20201116155749392](Mysql 45讲.assets/image-20201116155749392.png)
+
+![image-20201116155756898](Mysql 45讲.assets/image-20201116155756898.png)
+
+### 等flush
+
+![image-20201116160019004](Mysql 45讲.assets/image-20201116160019004.png)
+
+对表做flush操作的用 法，一般有以下两个：
+
+```mysql
+flush tables t with read lock;
+flush tables with read lock;
+```
+
+正常这两个语句执行起来都很快，除非它们也被别的线程堵住了。
+
+![image-20201116160100928](Mysql 45讲.assets/image-20201116160100928.png)
+
+每行停一秒，这样这个语句默认要执行10万秒，在这期间表 t一直是被session A“打开”着。然后，session B的flush tables t命令再要去关闭表t，就需要等 session A的查询结束。这样，session C要再次查询的话，就会被flush 命令堵住了。
+
+### 等行锁
+
+经过了表级锁的考验，我们的select 语句终于来到引擎里了。
+
+![image-20201116161213976](Mysql 45讲.assets/image-20201116161213976.png)
+
+访问id=1这个记录时要加读锁，如果这时候已经有一个事务在这行记录上持有一个写锁
+
+![image-20201116161133672](Mysql 45讲.assets/image-20201116161133672.png)
+
+查出是谁占着这个写锁，sys.innodb_lock_waits 表查到。
+
+```mysql
+mysql> select * from t sys.innodb_lock_waits where locked_table=`'test'.'t'`\G
+```
+
+![image-20201116161309552](Mysql 45讲.assets/image-20201116161309552.png)
+
+而干掉这个罪魁祸首的方式，就是 KILLQUERY 4或KILL 4。
+
+不过，这里不应该显示“KILLQUERY 4”。这个命令表示停止4号线程当前正在执行的语句，而这 个方法其实是没有用的。因为占有行锁的是update语句，这个语句已经是之前执行**完成了的**， 现在执行KILLQUERY，无法让这个事务去掉id=1上的行锁。
+
+KILL 4才有效，也就是说直接**断开这个连接**。这里隐含的一个逻辑就是，连接被断开的 时候，会**自动<font color=red>回滚</font> 这个连接里面正在执行的线程**，也就释放了id=1上的行锁。
+
+## 第二类：查询慢
+
+```mysql
+mysql> select * from t where c=50000 limit 1;
+```
+
+字段c上没有索引，这个语句只能走id主键顺序扫描，因此需要扫描5万行。
+
+ `set long_query_time=0`，将慢查询日志的时间阈值设置为0。
+
+![image-20201116162714512](Mysql 45讲.assets/image-20201116162714512.png)
+
+**坏查询不一定是慢查询**
+
+slow log
+
+```mysql
+mysql> select * from t where id=1；
+```
+
+![image-20201116163556425](Mysql 45讲.assets/image-20201116163556425.png)
+
+![image-20201116163608020](Mysql 45讲.assets/image-20201116163608020.png)
+
+![image-20201116163617409](Mysql 45讲.assets/image-20201116163617409.png)
+
+![image-20201116163629724](Mysql 45讲.assets/image-20201116163629724.png)
+
+![image-20201116163715940](Mysql 45讲.assets/image-20201116163715940.png)
+
+session B更新完100万次，生成了100万个回滚日志(undo log)。
+
+带lock in share mode的SQL语句，是**当前读**
+
+## 小结
+
+执行“查一行”，可能会出现的被锁住和执行慢的例子。这其 中涉及到了表锁、行锁和一致性读的概念。
+
+## 问题
+
+我们在举例加锁读的时候，用的是这个语句，`select *fromt where id=1 lock in share mode`。由于id上有索引，所以可以直接定位到id=1这一行，因此读锁也是只加在了这一行上。 但如果是下面的SQL语句，
+
+```mysql
+begin;
+	select * from t where c=5 for update;
+commit;
+```
+
+这个语句序列是怎么加锁的呢？加的锁又是什么时候释放呢？
+
+c没有索引，全表扫描，。有同学的回答中还说明了读提交隔离级别下，在语句执行完 成后，是只有行锁的。而且语句执行完成后，InnoDB就会把不满足条件的行行锁去掉。 当然了，c=5这一行的**行锁**，还是会等到commit的时候才释放的。
+
+# 20 | 幻读是什么，幻读有什么问题？
+
+```mysql
+CREATE TABLE `t` (
+`id` int(11) NOTNULL,
+`c` int(11) DEFAULTNULL,
+`d` int(11) DEFAULTNULL,
+PRIMARY KEY (`id`),
+KEY `c` (`c`)
+) ENGINE=InnoDB;
+
+insert into t values(0,0,0),(5,5,5),
+(10,10,10),(15,15,15),(20,20,20),(25,25,25);
+```
+
+这个表除了主键id外，还有一个索引c，初始化语句在表中插入了6行数据。
+
+## 幻读是什么？
+
+只在id=5这一行加锁
+
+![image-20201116173632372](Mysql 45讲.assets/image-20201116173632372.png)
+
+
 
 
 
