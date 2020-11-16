@@ -1781,6 +1781,10 @@ insert into t values(0,0,0),(5,5,5),
 
 ![image-20201116173632372](Mysql 45讲.assets/image-20201116173632372.png)
 
+1
+
+
+
 
 
 
