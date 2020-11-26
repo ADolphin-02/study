@@ -2421,6 +2421,57 @@ coordinator在分发的时候，需要满足以下这**两个基本要求**：
 
 **没写完**
 
+# 27 | 主库出问题了，从库怎么办？
+
+![image-20201126164914926](Mysql 45讲.assets/image-20201126164914926.png)
+
+虚线箭头表示的是主备关系，也就是A和A’互为主备， 从库B、C、D指向的是主库A。一 主多从的设置
+
+## 基于位点的主备切换
+
+节点B设置成节点A’的从库，需要执行一条change master命令
+
+```mysql
+CHANGE MASTER TO
+MASTER_HOST=$host_name
+MASTER_PORT=$port
+MASTER_USER=$user_name
+MASTER_PASSWORD=$password
+MASTER_LOG_FILE=$master_log_name
+MASTER_LOG_POS=$master_log_pos
+```
+
+最后两个参数**主库**对应的**文件名**和**日志偏移量**。
+
+![image-20201126171908819](Mysql 45讲.assets/image-20201126171908819.png)
+
+```mysql
+mysqlbinlog File --stop-datetime=T --start-datetime=T
+```
+
+![image-20201126171940238](Mysql 45讲.assets/image-20201126171940238.png)
+
+end_log_pos后面的值“123”，表示的就是A’这个实例，在T时刻写入新的binlog的位置。 然后，我们就可以把123这个值作为$master_log_pos ，用在节点B的change master命令里。
+
+![image-20201126172041100](Mysql 45讲.assets/image-20201126172041100.png)
+
+### 一种做法是
+
+主动跳过一个事务。跳过命令的写法是：
+
+```mysql
+set global sql_slave_skip_counter=1;
+start slave;
+```
+
+### 另外一种方式是
+
+通过设置slave_skip_errors参数，直接设置跳过指定的错误。
+
+![image-20201126172153898](Mysql 45讲.assets/image-20201126172153898.png)
+
+## GTID
+
 # 28 | 读写分离有哪些坑？
 
 ![image-20201125113447147](Mysql 45讲.assets/image-20201125113447147.png)
