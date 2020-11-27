@@ -2455,6 +2455,8 @@ end_log_pos后面的值“123”，表示的就是A’这个实例，在T时刻�
 
 ![image-20201126172041100](Mysql 45讲.assets/image-20201126172041100.png)
 
+两个都执行了，发生主键冲突
+
 ### 一种做法是
 
 主动跳过一个事务。跳过命令的写法是：
@@ -2471,6 +2473,26 @@ start slave;
 ![image-20201126172153898](Mysql 45讲.assets/image-20201126172153898.png)
 
 ## GTID
+
+MySQL 5.6 版本引入了GTID，彻底解决了这两种操作都很复杂，而且容易出错
+
+GTID的全称是Global Transaction Identifier，也就是全局事务IDD，是一个事务在**提交**的时候生成 的，是这个事务的唯一标识。它由两部分组成，格式是：
+
+```
+GTID=source_id:transaction_id
+```
+
+实例第一次启动时自动生成的，是一个全局唯一的值
+
+gno是一个整数，初始值是1，每次提交事务的时候分配给这个事务，并加1。
+
+MySQL里面我们说transaction_id就是指事务id，事务id是在事务**执行过程**中分配的，如 果这个事务回滚了，事务id也会递增，而这个是在事务**提交**的时候才会分配。
+
+### GTID模式的启动
+
+启动一个MySQL实例的时候，加上参数gtid_mode=on 和enforce_gtid_consistency=on
+
+
 
 # 28 | 读写分离有哪些坑？
 
