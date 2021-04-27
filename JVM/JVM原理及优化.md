@@ -1061,5 +1061,407 @@ ParNew (promotion failed): 7260K->7970K(9216K), 0.0048975 secs
 
 
 
+# Metaspace内存溢出
+
+一旦JVM不停地加载类，加载了很多很多的类，然后Metaspace区域放满了，触发FULL GC
+
+![image-20210425112259840](JVM原理及优化.assets/image-20210425112259840.png)
+
+## 什么情况下会发生Metaspace内存溢出
+
+- 上线系统的时候对Metaspace区域直接用默认的参数
+
+   默认几十MB
+
+- 用cglib之类的技术动态生成一些类
+
+## 模拟
+
+### CGLIB动态生成类的代码示例
+
+```java
+<dependency>
+
+   <groupId>cglib</groupId>
+
+   <artifactId>cglib</artifactId>
+
+   <version>3.3.0</version>
+
+</dependency>
+```
+
+![image-20210425155914536](JVM原理及优化.assets/image-20210425155914536.png)
+
+你权且当做Enhancer是用来生成类的一个API
+
+Enhancer生成的类是Car类的子类，Car类是生成类的父类
+
+如果你调用子类对象的run()方法，会先被这里的MethodInterceptor拦截一下
+
+```java
+-XX:MetaspaceSize=10m -XX:MaxMetaspaceSize=10m
+    while(true){
+        
+    }
+Caused by: java.lang.OutOfMemoryError: Metaspace。
+```
+
+
+
+
+
+# 线程的栈内存溢出
+
+## 一个重要的概念：
+
+- 每次**方法**调用的栈桢都是要占用内存的
+- 每次这个线程**调用一个方法**，都会将本次方法调用的栈**桢压入虚拟机栈里**，这个栈桢里是有方法的局部变量的。
+
+## 什么情况下会发生栈内存溢出
+
+1. 递归方法调用
+
+通常来说，我们会设置每个线程的栈内存就是1MB，假设你一个JVM进程内包括他自带的后台线程，你依赖的第三方组件的后台线程，加上你的核心工作线程（比如说你部署在Tomcat中，那就是Tomcat的工作线程），还有你自己可能额外创建的一些线程，可能你一共JVM中有1000个线程。
+
+**4核8G机器上**:内部所有的线程数量加起来在几百个是比较合理的，也就占据几百MB的内存，线程太多了，4核CPU负载也会过高，也并不好。
+
+## 模拟
+
+![image-20210425160411270](JVM原理及优化.assets/image-20210425160411270.png)
+
+当这个线程调用了5675次方法之后，他的栈里压入了5675个栈桢，最终把1MB的栈内存给塞满了
+
+所以GC日志对你有用吗？
+
+**没用**
+
+内存快照呢？
+
+同样是针对堆内存和Metaspace的，所以对线程的栈内存而言，也不需要借助这个东西。
+
+- -XX:ThreadStackSize=1m
+- -XX:+PrintGCDetails
+- -Xloggc:gc.log
+- -XX:+HeapDumpOnOutOfMemoryError
+- -XX:HeapDumpPath=./
+- -XX:+UseParNewGC
+- -XX:+UseConcMarkSweepGC
+
+报错：
+
+![image-20210425164947443](JVM原理及优化.assets/image-20210425164947443.png)
+
+你只要把所有的异常都写入本地日志文件，那么当你发现系统崩溃了，第一步就去日志里定位一下异常信息就知道了。
+
+# 堆内存溢出
+
+老年代GC过后，依然存活下来了很多的对象，这个时候如果年轻代还有一批对象等着放进老年代，人家GC过后空间还是不足怎么办？
+
+![image-20210425140128832](JVM原理及优化.assets/image-20210425140128832.png)
+
+## 什么时候
+
+1. 系统承载高并发请求，因为请求量过大，导致大量对象都是存活的
+2. 系统有内存泄漏的问题
+
+## 模拟
+
+![image-20210425160758933](JVM原理及优化.assets/image-20210425160758933.png)
+
+```java
+：-Xms10m -Xmx10m
+    
+```
+
+-Xms10m
+
+-Xmx10m
+
+-XX:+PrintGCDetails
+
+-Xloggc:gc.log
+
+-XX:+HeapDumpOnOutOfMemoryError
+
+-XX:HeapDumpPath=./
+
+-XX:+UseParNewGC
+
+-XX:+UseConcMarkSweepGC
+
+![image-20210425160840085](JVM原理及优化.assets/image-20210425160840085.png)
+
+mat分析
+
+![image-20210425165108911](JVM原理及优化.assets/image-20210425165108911.png)
+
+点击**Details**
+
+![image-20210425165210507](JVM原理及优化.assets/image-20210425165210507.png)
+
+![image-20210425165310028](JVM原理及优化.assets/image-20210425165310028.png)
+
+# 大数据量系统OOM
+
+这个系统会不停的加载数据到内存里来计算，几十万多则上百万
+
+![image-20210425161035116](JVM原理及优化.assets/image-20210425161035116.png)
+
+## 针对Kafka故障设计的高可用场景
+
+​	刚开始是：一旦kfk错误就存留在内存中，直到恢复（重试）
+
+​	所以导致内存堆积越来越多
+
+解决：取消重试方案，计算结果写本地磁盘，允许内存中的数据被回收
+
+## 场景二：
+
+如果在某个节点写日志时发生了某些异常，此时也必须将这个链路节点的异常写入ES集群里去
+
+![image-20210425161604063](JVM原理及优化.assets/image-20210425161604063.png)
+
+![image-20210425161642090](JVM原理及优化.assets/image-20210425161642090.png)
+
+当时这个同学居然在log()方法中一旦ES集群出现故障的时候再次调用了自己，继续尝试将日志写入ES集群。无限循环
+
+## 第二个案例：没有缓存的动态代理
+
+![image-20210425162050340](JVM原理及优化.assets/image-20210425162050340.png)
+
+其实可以混存起来（相当于工厂模式）
+
+![image-20210425162117176](JVM原理及优化.assets/image-20210425162117176.png)
+
+# OOM进行监控和报警
+
+- 公司最好是应该有一种监控平台，比如Zabbix、Open-Falcon之类的监控平台。
+- 一种是被动等待系统挂掉后客服来通知你
+
+# 溢出的时自动dump内存快照
+
+```java
+-XX:+HeapDumpOnOutOfMemoryError  
+
+-XX:HeapDumpPath=/usr/local/app/oom
+    
+    目前为止：
+    “-Xms4096M -Xmx4096M -Xmn3072M -Xss1M  -XX:MetaspaceSize=256M -XX:MaxMetaspaceSize=256M -XX:+UseParNewGC -XX:+UseConcMarkSweepGC -XX:CMSInitiatingOccupancyFaction=92 -XX:+UseCMSCompactAtFullCollection -XX:CMSFullGCsBeforeCompaction=0 -XX:+CMSParallelInitialMarkEnabled -XX:+CMSScavengeBeforeRemark -XX:+DisableExplicitGC -XX:+PrintGCDetails -Xloggc:gc.log -XX:+HeapDumpOnOutOfMemoryError  -XX:HeapDumpPath=/usr/local/app/oom”
+        
+```
+
+无限的在永久 创建class
+
+![image-20210425163211955](JVM原理及优化.assets/image-20210425163211955.png)发生OOM，会自动生存一个是gc.log，还有一个是java_pid910.hprof
+
+先来分析一下gc.log ![image-20210425163044833](JVM原理及优化.assets/image-20210425163044833.png)
+
+然后我们再用MAT分析一下OOM
+
+![image-20210425163150097](JVM原理及优化.assets/image-20210425163150097.png)
+
+**解决这个问题的办法也很简单，直接对Enhancer做一个缓存，只有一个，不要无限制的去生成类就可以了**
+
+# 案例实战：每秒上百请求的OOM？
+
+## 案例背景介绍
+
+一个每秒仅仅只有100+请求的系统却频繁的因为OOM而崩溃
+
+到一个OOM问题是如何牵扯到Tomcat底层工作原理、Tomcat内核参数的设置、服务请求超时时间等问题的。
+
+## 系统发生OOM的生产现场
+
+**第一件事情：**一定是登录到线上机器去看日志，而不是做别的事情。
+
+```java
+Exception in thread "http-nio-8080-exec-1089" java.lang.OutOfMemoryError: Java heap space
+```
+
+Tomcat的底层工作原理有一定了解的朋友，看出是Tomcat
+
+## Tomcat如何去监听8080上收到请求？
+
+Tomcat有自己的工作线程
+
+![image-20210427150046976](JVM原理及优化.assets/image-20210427150046976.png)
+
+## 看异常日志
+
+-XX:+HeapDumpOnOutOfMemoryError
+
+**这个参数会在系统内存溢出的时候导出来一份内存快照到我们指定的位置。**
+
+## 分析
+
+首先我们会发现占据内存最大的是大量的“byte[]”数组
+
+因此我们直接可以得出第一个结论：Tomcat工作线程在处理请求的时候会创建大量的byte[]数组，大概有8G左右，直接把JVM堆内存占满了。
+
+![image-20210427150243054](JVM原理及优化.assets/image-20210427150243054.png)
+
+![image-20210427150337582](JVM原理及优化.assets/image-20210427150337582.png)
+
+- 那么在MAT上可以继续查看一下这个数组是被谁引用的，大致可以发现是Tomcat的类引用的，具体来说是类似下面的这个类：
+
+  org.apache.tomcat.util.threads.TaskThread
+
+- 此时我们发现Tomcat的工作线程大致有400个左右，也就是说每个Tomcat的工作线程会创建2个byte[]数组，每个byte[]数组是10MB左右
+
+![image-20210427150433475](JVM原理及优化.assets/image-20210427150433475.png)
+
+## 每秒QPS才只有100？！！	
+
+我们检查了一下系统的监控，发现每秒请求并不是400，而是100！
+
+出现这种情况只有一种可能，那就是每个请求处理需要4秒钟的时间！
+
+好，**第一个问题**解决了，那么**第二个问题**来了，为什么Tomcat工作线程在处理一个请求的时候会创建2个10MB的数组？
+
+找到 tomcat 的配置;  max-http-header-size: 10000000
+
+> 导致Tomcat工作线程在处理请求的时候会创建2个数组，每个数组的大小如上面配置就是10MB。
+
+![image-20210427150820882](JVM原理及优化.assets/image-20210427150820882.png)
+
+## 为什么处理一个请求需要4秒钟？
+
+发现日志中除了OOM以外，其实有大量的服务请求调用超时的异常，类似下面那样子：
+
+Timeout Exception...
+
+超时时间一直卡住4秒钟之后才会抛出Timeout异常
+
+![image-20210427150922226](JVM原理及优化.assets/image-20210427150922226.png)
+
+## 优化
+
+- 最核心的问题就是那个超时时间设置的实在太长了，因此立马将超时时间改为1秒即可。
+- 对Tomcat的那个参数，max-http-header-size，可以适当调节的小一些就可以了
+
+
+
+# 案例实战：Jetty 服务器的 NIO 机制是如何导致堆外内存溢出的？ 
+
+## 背景
+
+使用Jetty作为Web服务器的时候在某个非常罕见的场景下发生的一次堆外内存溢出的场景。
+
+其实你大致可以理解为跟Tomcat一样的东西，就是Web容器
+
+## 案发现场
+
+日志
+
+```java
+nio handle failed java.lang.OutOfMemoryError: Direct buffer memory
+at org.eclipse.jetty.io.nio.xxxx
+at org.eclipse.jetty.io.nio.xxxx
+at org.eclipse.jetty.io.nio.xxxx
+```
+
+是我们没见过的一块区域：**Direct buffer memory**
+
+## 初步分析
+
+Direct buffer memory，就是直接内存的意思，通常更好的称呼就是“堆外内存”。
+
+![image-20210427165825100](JVM原理及优化.assets/image-20210427165825100.png)
+
+## 堆外内存是如何申请的，如何释放的？
+
+- 申请
+
+如果在Java代码里要申请使用一块堆外内存空间，是使用DirectByteBuffer这个类，**在构建这个对象的同时**，会在堆外内存中划出来一块内存空间跟这个对象关联起来	
+
+![image-20210427172642048](JVM原理及优化.assets/image-20210427172642048.png)
+
+- 释放
+
+buffer对象没人引用的时候，会在yougGC或者full GC去掉。
+
+![image-20210427172955791](JVM原理及优化.assets/image-20210427172955791.png)
+
+## 为什么OOM
+
+Buffer 对象一直存活
+
+可能：高并发，不过这个系统并不高
+
+**真实原因**：
+
+ 新生代 一两百m，老年七八百
+
+导致：Survivor只有10M，放不下，关联堆外的对象太多
+
+老年代没有触发FULLGC 就堆外OOM
+
+## 难道Java NIO就没考虑过这个问题吗？
+
+在**Java NIO的源码中会做如下处理**
+
+都会调用System.gc()去提醒JVM去主动执行以下gc
+
+但是我们又在JVM中设置了如下参数：
+
+> -XX:+DisableExplicitGC
+
+## 最终优化
+
+给年轻代更多内存，让Survivor区域有更大的空间
+
+另外一个就是放开-XX:+DisableExplicitGC这个限制，让System.gc()生效。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 

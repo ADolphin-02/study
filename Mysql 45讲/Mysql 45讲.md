@@ -1328,7 +1328,7 @@ number_of_tmp_files表示的是，排序过程中使用的临时文件数
 sort_buffer里面 要放的**字段数太多**，这样内存里能够同时放下的行数很少，要分成很多个临时文件，排序的性能 会很差。
 
 ```mysql
-SETmax_length_for_sort_data = 16;
+SET max_length_for_sort_data = 16;
 ```
 
 city、name、age 这三个字段的定义总长度是36，我把max_length_for_sort_data设置为16
