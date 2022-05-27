@@ -1339,6 +1339,9 @@ Timeout Exception...
 
 ![image-20210427150922226](JVM原理及优化.assets/image-20210427150922226.png)
 
+从日志信息可知，request的header部分太大，超过了tomcat允许的最大值。默认情况下，tomcat（8.0版本）允许的http请求header的最大值是8024个字节（8KB）。那为什么之前没有出现这个问题呢？原因是，项目迁移到SCP平台上之后，改成JWT token做权限校验，这个JWT token会被添加到request的header，然而JWT token一般来说都很大（平均有6k个字节左右），所以说在增加了JWT token这个header以及其他一些相关的headers之后，整个request的header部分就超过8024个字节，于是就出现了这个问题
+
+
 ## 优化
 
 - 最核心的问题就是那个超时时间设置的实在太长了，因此立马将超时时间改为1秒即可。
@@ -1538,11 +1541,13 @@ jstat -gc pid **先看老年代**
 
 # 实战：一次服务类加载器过多引发的OOM问
 
+![image-20220408142830920](JVM原理及优化.assets/image-20220408142830920.png)
 
 
 
 
 
+![image-20220411161822451](JVM原理及优化.assets/image-20220411161822451.png)
 
 
 
